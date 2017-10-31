@@ -259,7 +259,7 @@ public class DocumentManagementImpl extends DocumentManagementBase implements Do
 		return doc;
 	}
 
-	public Object getDocumentContent(DocumentKey docKey) {
+	private Object getDocumentContent(DocumentKey docKey) {
 		return ddSvc.getCachedObject(CN_XDM_CONTENT, docKey, binaryContent);
 	}
 
@@ -1065,9 +1065,9 @@ public class DocumentManagementImpl extends DocumentManagementBase implements Do
 
 	private DocumentAccessor removeDocumentInternal(DocumentKey docKey, Document doc, Properties props) throws BagriException {
 		triggerManager.applyTrigger(doc, Order.before, Scope.delete);
-		Object result = xddCache.executeOnKey(docKey, new DocumentRemoveProcessor(txManager.getCurrentTransaction(), props));
+		Object result = xddCache.executeOnKey(docKey, new DocumentRemoveProcessor(txManager.getCurrentTransaction(), ddSvc.getLastKeyForUri(doc.getUri()), props));
 		if (result instanceof Exception) {
-			logger.error("removeDocument.error; uri: {}", doc.getUri(), result);
+			logger.error("removeDocumentInternal.error; uri: {}", doc.getUri(), result);
 			if (result instanceof BagriException) {
 				throw (BagriException) result;
 			}
@@ -1081,7 +1081,7 @@ public class DocumentManagementImpl extends DocumentManagementBase implements Do
         if (newDoc != null) {
 			triggerManager.applyTrigger(newDoc, Order.after, Scope.delete);
         }
-		((QueryManagementImpl) repo.getQueryManagement()).removeQueryResults(docAccessor.getDocumentKey());
+		((QueryManagementImpl) repo.getQueryManagement()).removeQueryResults(docKey.getKey());
 
 		return docAccessor;
 	}
@@ -1303,8 +1303,21 @@ public class DocumentManagementImpl extends DocumentManagementBase implements Do
 		return remCount;
 	}
 
-	public void deleteDocumentFromContentCache(Map.Entry<DocumentKey, Document> entry) {
-		cntCache.delete(entry.getKey());
+	public Object processDocumentRemoval(Map.Entry<DocumentKey, Document> entry, Properties properties, long txStart, Document doc) {
+		if (txStart == TX_NO) {
+			entry.setValue(null);
+			cntCache.delete(entry.getKey());
+			return new DocumentAccessorImpl();
+		} else {
+			doc.finishDocument(txStart);
+		}
+		entry.setValue(doc);
+		String headers = properties.getProperty(pn_document_headers, String.valueOf(DocumentAccessor.HDR_CLIENT_DOCUMENT));
+		long headMask = Long.parseLong(headers);
+		if ((headMask & DocumentAccessor.HDR_CONTENT) != 0) {
+			return new DocumentAccessorImpl(repo, doc, headMask, getDocumentContent(entry.getKey()));
+		}
+		return new DocumentAccessorImpl(repo, doc, headMask);
 	}
 
 	private void updateStats(String name, boolean add, int elements, int fragments) {
